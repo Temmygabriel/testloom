@@ -63,10 +63,6 @@ async function executeStep(
         throw new Error("navigate step missing value (URL)");
       }
 
-      /*
-       * Resolve both absolute and relative URLs against the target app.
-       * Then ensure navigation cannot leave the target application's origin.
-       */
       const baseUrl = new URL(targetUrl);
       const resolvedUrl = new URL(step.value, targetUrl);
 
@@ -81,6 +77,14 @@ async function executeStep(
       });
 
       return `navigated to ${resolvedUrl.toString()}`;
+    }
+
+    case "reload": {
+      await page.reload({
+        timeout: STEP_TIMEOUT,
+      });
+
+      return "reloaded the current page";
     }
 
     case "click": {
@@ -313,6 +317,14 @@ async function runCheck(
         return `${step.selector} is visible`;
       }
 
+      if (step.type === "navigate") {
+        return `navigate to ${step.value}`;
+      }
+
+      if (step.type === "reload") {
+        return "reload the current page";
+      }
+
       return step.type;
     })
     .join("; ");
@@ -343,9 +355,6 @@ export async function runChecks(
     const context = await browser.newContext();
     const page = await context.newPage();
 
-    /*
-     * Establish the initial target page before running checks.
-     */
     await page.goto(targetUrl, {
       timeout: STEP_TIMEOUT,
     });

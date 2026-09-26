@@ -53,95 +53,105 @@ function getClient(): OpenAI {
 }
 
 // ---------------------------------------------------------------------------
-// Instructions
-//
-// Groq's GPT-OSS models support JSON Object Mode. We keep the instructions
-// in the user message and explicitly require omitted optional fields rather
-// than null values.
+// Prompt
 // ---------------------------------------------------------------------------
 
 const INSTRUCTIONS = `
 You are Testloom's acceptance-test generator.
 
-Convert the feature request below into browser acceptance checks.
+Convert the feature request below into executable browser acceptance checks.
 
 Return ONLY valid JSON.
 Do not return markdown.
 Do not return code fences.
 Do not return explanations.
 
-The JSON must have exactly this top-level shape:
+The JSON must have this shape:
 
 {
   "checks": [
     {
       "id": "check-1",
       "description": "one sentence",
-      "steps": [
-        {
-          "type": "navigate",
-          "value": "/login"
-        }
-      ]
+      "steps": []
     }
   ]
 }
 
 Rules:
 
-1. "checks" must contain 2 to 6 checks.
+1. Generate 2 to 6 checks.
+
 2. Every check must contain:
    - id
    - description
    - steps
+
 3. Every check must contain at least one step.
-4. A step type MUST be exactly one of:
+
+4. Allowed step types are ONLY:
    - navigate
+   - reload
    - click
    - fill
    - expectVisible
    - expectText
    - expectUrl
 
-5. For each step:
-   - navigate: include "value"
-   - click: include "selector"
-   - fill: include "selector" and "value"
-   - expectVisible: include "selector"
-   - expectText: include "selector" and "expectedText"
-   - expectUrl: include "expectedUrl"
+5. Step rules:
 
-6. IMPORTANT:
-   - Omit irrelevant optional properties completely.
-   - Never output null values.
-   - Never invent action types.
-   - Prefer data-testid selectors.
-   - Generate checks that verify the feature end-to-end.
+navigate:
+  include "value"
 
-For the example feature:
-"Users can log in"
+reload:
+  include no selector, value, expectedText, or expectedUrl
 
-a valid response is:
+click:
+  include "selector"
+
+fill:
+  include "selector" and "value"
+
+expectVisible:
+  include "selector"
+
+expectText:
+  include "selector" and "expectedText"
+
+expectUrl:
+  include "expectedUrl"
+
+6. Never output null values.
+
+7. Omit irrelevant properties completely.
+
+8. Never invent action types.
+
+9. Prefer [data-testid=...] selectors whenever possible.
+
+10. Generate checks that together verify the feature end-to-end.
+
+11. IMPORTANT:
+If the feature request involves a user remaining logged in,
+remaining authenticated, or remaining signed in after refreshing
+or reloading:
+
+- explicitly use the "reload" action
+- do NOT replace reload with navigate
+- do NOT use logout as a substitute
+- verify the authenticated state AFTER reload
+
+For example, for:
+
+"Keep users logged in after refreshing the page."
+
+produce checks similar to:
 
 {
   "checks": [
     {
-      "id": "check-1",
-      "description": "The login page is reachable",
-      "steps": [
-        {
-          "type": "navigate",
-          "value": "/login"
-        },
-        {
-          "type": "expectVisible",
-          "selector": "[data-testid=login-form]"
-        }
-      ]
-    },
-    {
-      "id": "check-2",
-      "description": "Valid credentials reach the dashboard",
+      "id": "check-login",
+      "description": "A valid user can reach the dashboard",
       "steps": [
         {
           "type": "navigate",
@@ -166,25 +176,60 @@ a valid response is:
           "expectedUrl": "/dashboard"
         }
       ]
+    },
+    {
+      "id": "check-refresh",
+      "description": "The authenticated session survives a browser refresh",
+      "steps": [
+        {
+          "type": "navigate",
+          "value": "/login"
+        },
+        {
+          "type": "fill",
+          "selector": "[data-testid=username-input]",
+          "value": "demo"
+        },
+        {
+          "type": "fill",
+          "selector": "[data-testid=password-input]",
+          "value": "demo123"
+        },
+        {
+          "type": "click",
+          "selector": "[data-testid=login-submit]"
+        },
+        {
+          "type": "reload"
+        },
+        {
+          "type": "expectUrl",
+          "expectedUrl": "/dashboard"
+        },
+        {
+          "type": "expectVisible",
+          "selector": "[data-testid=dashboard-heading]"
+        }
+      ]
     }
   ]
 }
 
-Now generate checks for the feature request below.
+Now generate checks for:
 
 <feature_request>
 `;
+
+// ---------------------------------------------------------------------------
+// Response schema
+// ---------------------------------------------------------------------------
 
 const LLMResponseSchema = z.object({
   checks: z.array(AcceptanceCheckSchema),
 });
 
 // ---------------------------------------------------------------------------
-// Normalize model output before Zod validation.
-//
-// Some models may return null for optional properties even when instructed
-// to omit them. We remove those null properties because our TypeScript schema
-// represents them as optional, not nullable.
+// Normalize model output
 // ---------------------------------------------------------------------------
 
 function normalizeOutput(value: unknown): unknown {
@@ -217,17 +262,17 @@ function normalizeOutput(value: unknown): unknown {
 async function callLLM(
   featureRequest: string,
 ): Promise<AcceptanceCheck[]> {
-  const openaiCompatibleClient = getClient();
+  const groqClient = getClient();
 
   const response =
-    await openaiCompatibleClient.chat.completions.create({
+    await groqClient.chat.completions.create({
       model: "openai/gpt-oss-20b",
 
       response_format: {
         type: "json_object",
       },
 
-      temperature: 0.2,
+      temperature: 0.1,
 
       messages: [
         {
@@ -284,12 +329,18 @@ export async function parseRequirement(
   try {
     return await callLLM(featureRequest);
   } catch (firstError) {
-    console.error("[parser] First Groq attempt failed:", firstError);
+    console.error(
+      "[parser] First attempt failed:",
+      firstError,
+    );
 
     try {
       return await callLLM(featureRequest);
     } catch (secondError) {
-      console.error("[parser] Second Groq attempt failed:", secondError);
+      console.error(
+        "[parser] Second attempt failed:",
+        secondError,
+      );
 
       throw new ParserError(
         "Failed to generate valid acceptance checks after 2 attempts.",
