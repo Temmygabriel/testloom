@@ -2,46 +2,73 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import { store } from "@/lib/store";
 import type { CheckResult, Verification } from "@/types";
 
-type Props = {
-  params: {
-    checkId: string;
-  };
-};
+export default function EvidencePage() {
+  const params = useParams<{ checkId: string }>();
 
-export default function EvidencePage({ params }: Props) {
-  const [verification, setVerification] = useState<Verification | null>(null);
-  const [check, setCheck] = useState<CheckResult | null>(null);
+  const [verification, setVerification] =
+    useState<Verification | null>(null);
+
+  const [check, setCheck] =
+    useState<CheckResult | null>(null);
 
   useEffect(() => {
     const result = store.getResult();
 
     setVerification(result);
 
-    if (!result) return;
+    if (!result) {
+      return;
+    }
+
+    const rawCheckId = params?.checkId;
+
+    if (!rawCheckId) {
+      return;
+    }
+
+    const checkId = decodeURIComponent(rawCheckId);
 
     const found = result.checks.find(
-      (item) => item.checkId === decodeURIComponent(params.checkId),
+      (item) => item.checkId === checkId,
     );
 
     setCheck(found ?? null);
-  }, [params.checkId]);
+  }, [params]);
 
   if (!verification) {
     return (
-      <main className="min-h-screen px-6 py-16">
-        <div className="mx-auto max-w-3xl">
-          <h1 className="text-2xl font-semibold">
-            No verification result
-          </h1>
+      <main className="min-h-screen px-6 py-12">
+        <div className="mx-auto max-w-3xl space-y-6">
+          <Link
+            href="/verify"
+            className="text-xs font-mono text-[var(--muted)] hover:text-[var(--text)]"
+          >
+            ← Back to verify
+          </Link>
+
+          <div>
+            <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
+              Evidence
+            </p>
+
+            <h1 className="mt-3 text-3xl font-semibold">
+              No verification result
+            </h1>
+
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Run a verification first.
+            </p>
+          </div>
 
           <Link
             href="/verify"
-            className="mt-6 inline-block text-sm underline underline-offset-4"
+            className="inline-block text-sm underline underline-offset-4"
           >
-            Start a verification
+            Start a verification →
           </Link>
         </div>
       </main>
@@ -50,18 +77,29 @@ export default function EvidencePage({ params }: Props) {
 
   if (!check) {
     return (
-      <main className="min-h-screen px-6 py-16">
-        <div className="mx-auto max-w-3xl">
-          <h1 className="text-2xl font-semibold">
-            Evidence not found
-          </h1>
-
+      <main className="min-h-screen px-6 py-12">
+        <div className="mx-auto max-w-3xl space-y-6">
           <Link
             href="/verify/result"
-            className="mt-6 inline-block text-sm underline underline-offset-4"
+            className="text-xs font-mono text-[var(--muted)] hover:text-[var(--text)]"
           >
             ← Back to result
           </Link>
+
+          <div>
+            <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
+              Evidence
+            </p>
+
+            <h1 className="mt-3 text-3xl font-semibold">
+              Evidence not found
+            </h1>
+
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              The verification exists, but this check could not be
+              matched to it.
+            </p>
+          </div>
         </div>
       </main>
     );
@@ -91,12 +129,14 @@ export default function EvidencePage({ params }: Props) {
               Evidence
             </p>
 
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <h1 className="text-3xl font-semibold">
                 {check.description}
               </h1>
 
-              <span className={`text-sm font-mono ${statusClass}`}>
+              <span
+                className={`font-mono text-sm ${statusClass}`}
+              >
                 {check.status}
               </span>
             </div>
@@ -104,6 +144,7 @@ export default function EvidencePage({ params }: Props) {
         </header>
 
         <section className="grid gap-4 md:grid-cols-3">
+
           <div className="rounded-xl border border-[var(--border)] p-5">
             <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
               What we expected
@@ -133,6 +174,7 @@ export default function EvidencePage({ params }: Props) {
               {check.status}
             </p>
           </div>
+
         </section>
 
         <section className="space-y-4">
@@ -189,7 +231,9 @@ export default function EvidencePage({ params }: Props) {
                     className="grid gap-3 p-4 sm:grid-cols-[150px_110px_1fr]"
                   >
                     <span className="text-xs font-mono text-[var(--muted)]">
-                      {new Date(entry.timestamp).toLocaleTimeString()}
+                      {new Date(
+                        entry.timestamp,
+                      ).toLocaleTimeString()}
                     </span>
 
                     <span className="text-xs font-mono">
