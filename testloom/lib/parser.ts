@@ -1,18 +1,10 @@
 /**
  * parser.ts — LLM requirement → AcceptanceCheck[] parser
  *
- * This is the ONLY place an LLM is used in the pipeline.
- * All other verdict and execution logic is deterministic.
+ * Uses Groq through the OpenAI-compatible SDK.
  *
- * Flow:
- *   1. Send featureRequest to gpt-4o-mini with a constrained system prompt.
- *   2. Parse the JSON response.
- *   3. Validate against z.array(AcceptanceCheckSchema).
- *   4. On validation failure, retry once.
- *   5. If the retry also fails, throw ParserError.
- *
- * Security: the feature request is wrapped in explicit XML-style delimiters
- * so it cannot escape into the instruction section of the prompt.
+ * The parser is the only LLM-powered part of Testloom.
+ * Everything after this point is deterministic.
  */
 
 import OpenAI from "openai";
@@ -21,7 +13,9 @@ import { randomUUID } from "crypto";
 import { AcceptanceCheckSchema } from "@/types";
 import type { AcceptanceCheck } from "@/types";
 
-// ── Typed error ───────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Typed error
+// ---------------------------------------------------------------------------
 
 export class ParserError extends Error {
   constructor(
@@ -33,154 +27,272 @@ export class ParserError extends Error {
   }
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────────
-// Defines the closed ActionType vocabulary and the exact JSON schema the model
-// must produce. Example output is included to reduce hallucination.
+// ---------------------------------------------------------------------------
+// Groq client
+// ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You convert a software feature request into a list of browser acceptance checks.
+let client: OpenAI | null = null;
 
-Return ONLY a JSON object with this exact shape — no markdown, no explanation:
+function getClient(): OpenAI {
+  if (client) {
+    return client;
+  }
+
+  const apiKey = process.env.GROQ_API_KEY;
+
+  if (!apiKey) {
+    throw new ParserError("GROQ_API_KEY is not set");
+  }
+
+  client = new OpenAI({
+    apiKey,
+    baseURL: "https://api.groq.com/openai/v1",
+  });
+
+  return client;
+}
+
+// ---------------------------------------------------------------------------
+// Instructions
+//
+// Groq's GPT-OSS models support JSON Object Mode. We keep the instructions
+// in the user message and explicitly require omitted optional fields rather
+// than null values.
+// ---------------------------------------------------------------------------
+
+const INSTRUCTIONS = `
+You are Testloom's acceptance-test generator.
+
+Convert the feature request below into browser acceptance checks.
+
+Return ONLY valid JSON.
+Do not return markdown.
+Do not return code fences.
+Do not return explanations.
+
+The JSON must have exactly this top-level shape:
+
 {
   "checks": [
     {
-      "id": "<unique string>",
-      "description": "<one sentence describing what this check verifies>",
+      "id": "check-1",
+      "description": "one sentence",
       "steps": [
-        { "type": "<ActionType>", "selector": "<CSS or data-testid selector>", "value": "<string>", "expectedText": "<string>", "expectedUrl": "<string>" }
+        {
+          "type": "navigate",
+          "value": "/login"
+        }
       ]
     }
   ]
 }
 
 Rules:
-- "checks" must be an array of 2–6 checks.
-- Each check must have a non-empty "id", "description", and at least one step.
-- "steps[].type" must be EXACTLY one of these values (case-sensitive):
-    navigate | click | fill | expectVisible | expectText | expectUrl
-- Only include fields that are relevant to the step type:
-    navigate   → requires "value" (the URL or path to navigate to)
-    click      → requires "selector"
-    fill       → requires "selector" and "value"
-    expectVisible → requires "selector"
-    expectText → requires "selector" and "expectedText"
-    expectUrl  → requires "expectedUrl"
-- Do NOT invent new action types. Use only the list above.
-- Keep selectors simple: prefer [data-testid=X] over complex CSS.
-- Generate checks that together verify the feature end-to-end.
 
-Example output for "Users can log in":
+1. "checks" must contain 2 to 6 checks.
+2. Every check must contain:
+   - id
+   - description
+   - steps
+3. Every check must contain at least one step.
+4. A step type MUST be exactly one of:
+   - navigate
+   - click
+   - fill
+   - expectVisible
+   - expectText
+   - expectUrl
+
+5. For each step:
+   - navigate: include "value"
+   - click: include "selector"
+   - fill: include "selector" and "value"
+   - expectVisible: include "selector"
+   - expectText: include "selector" and "expectedText"
+   - expectUrl: include "expectedUrl"
+
+6. IMPORTANT:
+   - Omit irrelevant optional properties completely.
+   - Never output null values.
+   - Never invent action types.
+   - Prefer data-testid selectors.
+   - Generate checks that verify the feature end-to-end.
+
+For the example feature:
+"Users can log in"
+
+a valid response is:
+
 {
   "checks": [
     {
       "id": "check-1",
-      "description": "Login page is reachable",
+      "description": "The login page is reachable",
       "steps": [
-        { "type": "navigate", "value": "/login" },
-        { "type": "expectVisible", "selector": "[data-testid=login-form]" }
+        {
+          "type": "navigate",
+          "value": "/login"
+        },
+        {
+          "type": "expectVisible",
+          "selector": "[data-testid=login-form]"
+        }
       ]
     },
     {
       "id": "check-2",
       "description": "Valid credentials reach the dashboard",
       "steps": [
-        { "type": "navigate", "value": "/login" },
-        { "type": "fill", "selector": "[data-testid=username-input]", "value": "demo" },
-        { "type": "fill", "selector": "[data-testid=password-input]", "value": "demo123" },
-        { "type": "click", "selector": "[data-testid=login-submit]" },
-        { "type": "expectUrl", "expectedUrl": "/dashboard" }
+        {
+          "type": "navigate",
+          "value": "/login"
+        },
+        {
+          "type": "fill",
+          "selector": "[data-testid=username-input]",
+          "value": "demo"
+        },
+        {
+          "type": "fill",
+          "selector": "[data-testid=password-input]",
+          "value": "demo123"
+        },
+        {
+          "type": "click",
+          "selector": "[data-testid=login-submit]"
+        },
+        {
+          "type": "expectUrl",
+          "expectedUrl": "/dashboard"
+        }
       ]
     }
   ]
-}`;
+}
 
-// ── Response schema ───────────────────────────────────────────────────────────
-// The model must return { checks: AcceptanceCheck[] }
+Now generate checks for the feature request below.
+
+<feature_request>
+`;
 
 const LLMResponseSchema = z.object({
   checks: z.array(AcceptanceCheckSchema),
 });
 
-// ── Singleton client ──────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Normalize model output before Zod validation.
+//
+// Some models may return null for optional properties even when instructed
+// to omit them. We remove those null properties because our TypeScript schema
+// represents them as optional, not nullable.
+// ---------------------------------------------------------------------------
 
-let _client: OpenAI | null = null;
-
-function getClient(): OpenAI {
-  if (!_client) {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new ParserError("OPENAI_API_KEY is not set");
-    }
-    _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function normalizeOutput(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeOutput);
   }
-  return _client;
+
+  if (value && typeof value === "object") {
+    const input = value as Record<string, unknown>;
+    const output: Record<string, unknown> = {};
+
+    for (const [key, entry] of Object.entries(input)) {
+      if (entry === null) {
+        continue;
+      }
+
+      output[key] = normalizeOutput(entry);
+    }
+
+    return output;
+  }
+
+  return value;
 }
 
-// ── Core call ─────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// One Groq call
+// ---------------------------------------------------------------------------
 
-async function callLLM(featureRequest: string): Promise<AcceptanceCheck[]> {
-  const client = getClient();
+async function callLLM(
+  featureRequest: string,
+): Promise<AcceptanceCheck[]> {
+  const openaiCompatibleClient = getClient();
 
-  const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    response_format: { type: "json_object" },
-    temperature: 0.2, // Low temperature for consistent structured output
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        // Feature request wrapped in delimiters — prevents prompt injection
-        content: `<feature_request>\n${featureRequest}\n</feature_request>`,
+  const response =
+    await openaiCompatibleClient.chat.completions.create({
+      model: "openai/gpt-oss-20b",
+
+      response_format: {
+        type: "json_object",
       },
-    ],
-  });
+
+      temperature: 0.2,
+
+      messages: [
+        {
+          role: "user",
+          content:
+            INSTRUCTIONS +
+            featureRequest +
+            "\n</feature_request>",
+        },
+      ],
+    });
 
   const raw = response.choices[0]?.message?.content;
+
   if (!raw) {
-    throw new ParserError("LLM returned an empty response");
+    throw new ParserError("Groq returned an empty response");
   }
 
   let parsed: unknown;
+
   try {
     parsed = JSON.parse(raw);
-  } catch (e) {
-    throw new ParserError(`LLM response is not valid JSON: ${raw.slice(0, 200)}`, e);
+  } catch (error) {
+    throw new ParserError(
+      `Groq response was not valid JSON: ${raw.slice(0, 200)}`,
+      error,
+    );
   }
 
-  const result = LLMResponseSchema.safeParse(parsed);
+  const normalized = normalizeOutput(parsed);
+
+  const result = LLMResponseSchema.safeParse(normalized);
+
   if (!result.success) {
     throw new ParserError(
-      `LLM output failed schema validation: ${result.error.message}`,
+      `Groq output failed schema validation: ${result.error.message}`,
       result.error,
     );
   }
 
-  // Ensure every check has a stable unique ID (the LLM may reuse IDs)
   return result.data.checks.map((check) => ({
     ...check,
     id: check.id || randomUUID(),
   }));
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
-/**
- * Parse a natural-language feature request into a validated AcceptanceCheck[].
- *
- * Retries once on validation failure.
- * Throws ParserError if both attempts fail.
- */
 export async function parseRequirement(
   featureRequest: string,
 ): Promise<AcceptanceCheck[]> {
   try {
     return await callLLM(featureRequest);
-  } catch {
-    // Retry once — the LLM occasionally produces malformed JSON on first attempt
+  } catch (firstError) {
+    console.error("[parser] First Groq attempt failed:", firstError);
+
     try {
       return await callLLM(featureRequest);
     } catch (secondError) {
+      console.error("[parser] Second Groq attempt failed:", secondError);
+
       throw new ParserError(
-        "Failed to generate valid acceptance checks after 2 attempts. " +
-          (secondError instanceof Error ? secondError.message : String(secondError)),
+        "Failed to generate valid acceptance checks after 2 attempts.",
         secondError,
       );
     }
