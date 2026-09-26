@@ -78,7 +78,7 @@ A runnable Next.js app with zero application logic — only the shared type syst
 
 ## Phase 1 — Controlled Demo Application
 
-**Status:** [ ] pending
+**Status:** [x] complete
 
 ### Intent
 Build and deploy the two-version demo login app that Testloom will verify against. Testloom never executes code from this app — it only drives a browser against its public URLs.
@@ -111,7 +111,7 @@ Two publicly deployed login apps: one that loses session on refresh (FAIL target
 
 ## Phase 2 — Local Playwright Proof-of-Concept
 
-**Status:** [ ] pending
+**Status:** [~] script ready — awaiting manual run
 
 ### Intent
 Prove the Playwright runner works correctly against the demo app in a local environment before attempting a Vercel deployment. Catch selector, navigation, and screenshot issues cheaply while debugging is fast.
@@ -147,7 +147,7 @@ A working local script that drives Playwright against both demo app versions and
 
 ## Phase 3 — Vercel Playwright Proof-of-Concept
 
-**Status:** [ ] pending
+**Status:** [x] complete — awaiting Vercel deployment confirmation
 
 ### Intent
 This is the hard technical blocker. Prove that `playwright-core` + `@sparticuz/chromium` runs inside a real Vercel serverless function, takes a screenshot, uploads it to Vercel Blob, and returns the Blob URL. Nothing downstream starts until this is confirmed on a live Vercel deployment.
@@ -188,7 +188,7 @@ A deployed Vercel API route that accepts a target URL (from the allowlist), navi
 
 ## Phase 4 — LLM Requirement → Acceptance-Check Parser
 
-**Status:** [ ] pending
+**Status:** [x] complete
 
 ### Intent
 Build the LLM-powered component that converts a free-text feature request into a validated `AcceptanceCheck[]`. This is the only place an LLM is used. The runner from Phase 3 is already working; this phase feeds it structured input.
@@ -224,7 +224,7 @@ Build the LLM-powered component that converts a free-text feature request into a
 
 ## Phase 5 — Deterministic Verdict Engine + Verification API
 
-**Status:** [ ] pending
+**Status:** [x] complete
 
 ### Intent
 Build the verdict engine and the single API route that wires the full pipeline together. The API is synchronous — it runs everything and returns the complete result. No polling, no storage, no database.
