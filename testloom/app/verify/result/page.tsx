@@ -3,31 +3,15 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { store } from "@/lib/store";
-import type { CheckResult, Verification } from "@/types";
+import type { Verification } from "@/types";
 
-type Props = {
-  params: {
-    checkId: string;
-  };
-};
-
-export default function EvidencePage({ params }: Props) {
-  const [verification, setVerification] = useState<Verification | null>(null);
-  const [check, setCheck] = useState<CheckResult | null>(null);
+export default function ResultPage() {
+  const [verification, setVerification] =
+    useState<Verification | null>(null);
 
   useEffect(() => {
-    const result = store.getResult();
-
-    setVerification(result);
-
-    if (!result) return;
-
-    const found = result.checks.find(
-      (item) => item.checkId === decodeURIComponent(params.checkId),
-    );
-
-    setCheck(found ?? null);
-  }, [params.checkId]);
+    setVerification(store.getResult());
+  }, []);
 
   if (!verification) {
     return (
@@ -36,6 +20,10 @@ export default function EvidencePage({ params }: Props) {
           <h1 className="text-2xl font-semibold">
             No verification result
           </h1>
+
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Run a verification first.
+          </p>
 
           <Link
             href="/verify"
@@ -48,170 +36,109 @@ export default function EvidencePage({ params }: Props) {
     );
   }
 
-  if (!check) {
-    return (
-      <main className="min-h-screen px-6 py-16">
-        <div className="mx-auto max-w-3xl">
-          <h1 className="text-2xl font-semibold">
-            Evidence not found
-          </h1>
+  const passed = verification.checks.filter(
+    (check) => check.status === "PASS",
+  ).length;
 
-          <Link
-            href="/verify/result"
-            className="mt-6 inline-block text-sm underline underline-offset-4"
-          >
-            ← Back to result
-          </Link>
-        </div>
-      </main>
-    );
-  }
-
-  const statusClass =
-    check.status === "PASS"
+  const verdictClass =
+    verification.verdict === "PASS"
       ? "text-emerald-400"
-      : check.status === "FAIL"
+      : verification.verdict === "FAIL"
         ? "text-red-400"
         : "text-amber-400";
 
   return (
     <main className="min-h-screen px-6 py-12">
-      <div className="mx-auto max-w-5xl space-y-10">
+      <div className="mx-auto max-w-4xl space-y-10">
 
         <header className="space-y-4">
           <Link
-            href="/verify/result"
+            href="/verify"
             className="text-xs font-mono text-[var(--muted)] hover:text-[var(--text)]"
           >
-            ← Back to result
+            ← New verification
           </Link>
 
           <div>
             <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
-              Evidence
+              Verification result
             </p>
 
-            <div className="mt-3 flex items-center gap-3">
-              <h1 className="text-3xl font-semibold">
-                {check.description}
+            <div className="mt-3 flex flex-wrap items-end gap-4">
+              <h1
+                className={`text-5xl font-semibold ${verdictClass}`}
+              >
+                {verification.verdict}
               </h1>
 
-              <span className={`text-sm font-mono ${statusClass}`}>
-                {check.status}
-              </span>
+              <p className="pb-1 text-sm text-[var(--muted)]">
+                {passed} / {verification.checks.length} checks passed
+              </p>
             </div>
+
+            <p className="mt-5 max-w-2xl text-lg">
+              {verification.featureRequest}
+            </p>
           </div>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-xl border border-[var(--border)] p-5">
-            <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
-              What we expected
-            </p>
+        <section className="rounded-xl border border-[var(--border)] p-5">
+          <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
+            Checks
+          </p>
 
-            <p className="mt-4 text-sm leading-6">
-              {check.expected}
-            </p>
-          </div>
+          <div className="mt-4 divide-y divide-[var(--border)]">
+            {verification.checks.map((check) => {
+              const statusClass =
+                check.status === "PASS"
+                  ? "text-emerald-400"
+                  : check.status === "FAIL"
+                    ? "text-red-400"
+                    : "text-amber-400";
 
-          <div className="rounded-xl border border-[var(--border)] p-5">
-            <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
-              What the app did
-            </p>
-
-            <p className="mt-4 text-sm leading-6">
-              {check.observed}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-[var(--border)] p-5">
-            <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
-              What the check observed
-            </p>
-
-            <p className={`mt-4 text-sm leading-6 ${statusClass}`}>
-              {check.status}
-            </p>
-          </div>
-        </section>
-
-        <section className="space-y-4">
-          <div>
-            <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
-              Browser evidence
-            </p>
-          </div>
-
-          {check.evidence.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-[var(--border)] p-8">
-              <p className="text-sm text-[var(--muted)]">
-                No screenshot was stored for this check.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {check.evidence.map((url) => (
-                <a
-                  key={url}
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block overflow-hidden rounded-xl border border-[var(--border)]"
+              return (
+                <div
+                  key={check.checkId}
+                  className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <img
-                    src={url}
-                    alt={`Evidence screenshot for ${check.description}`}
-                    className="w-full"
-                  />
-                </a>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="space-y-4">
-          <div>
-            <p className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">
-              Action timeline
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-[var(--border)]">
-            {check.actionLog.length === 0 ? (
-              <p className="p-6 text-sm text-[var(--muted)]">
-                No action log was recorded.
-              </p>
-            ) : (
-              <div className="divide-y divide-[var(--border)]">
-                {check.actionLog.map((entry, index) => (
-                  <div
-                    key={`${entry.timestamp}-${index}`}
-                    className="grid gap-3 p-4 sm:grid-cols-[150px_110px_1fr]"
-                  >
-                    <span className="text-xs font-mono text-[var(--muted)]">
-                      {new Date(entry.timestamp).toLocaleTimeString()}
+                  <div className="flex items-start gap-3">
+                    <span
+                      className={`font-mono text-lg ${statusClass}`}
+                    >
+                      {check.status === "PASS"
+                        ? "✓"
+                        : check.status === "FAIL"
+                          ? "✕"
+                          : "?"}
                     </span>
 
-                    <span className="text-xs font-mono">
-                      {entry.actionType}
-                    </span>
+                    <div>
+                      <p className="font-medium">
+                        {check.description}
+                      </p>
 
-                    <div className="min-w-0">
-                      {entry.selector && (
-                        <p className="break-all text-xs font-mono text-[var(--muted)]">
-                          {entry.selector}
-                        </p>
-                      )}
-
-                      <p className="mt-1 text-sm">
-                        {entry.outcome}
+                      <p
+                        className={`mt-1 text-xs font-mono ${statusClass}`}
+                      >
+                        {check.status}
                       </p>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
+
+                  <Link
+                    href={`/verify/evidence?checkId=${encodeURIComponent(check.checkId)}`}
+                    className="text-sm underline underline-offset-4"
+                  >
+                    View evidence →
+                  </Link>
+                </div>
+              );
+            })}
           </div>
+        </section>
+
+        <section className="text-xs font-mono text-[var(--muted)]">
+          Verification ID: {verification.id}
         </section>
 
       </div>
