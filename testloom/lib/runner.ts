@@ -3,13 +3,14 @@
  *
  * Executes an AcceptanceCheck[] against a target URL and returns CheckResult[].
  *
- * Design rules (from spec):
- * - Unknown ActionType → INCONCLUSIVE for that check (never throws)
- * - Playwright error or timeout → INCONCLUSIVE for the affected check
- * - Assertion failure (wrong text, wrong URL, element missing) → FAIL
+ * Design rules:
+ * - Unknown ActionType → INCONCLUSIVE for that check
+ * - Playwright/infrastructure error → INCONCLUSIVE
+ * - Assertion failure → FAIL
  * - All steps pass → PASS
- * - The runner never crashes the whole run due to a single check failing
- * - Screenshots are uploaded to Vercel Blob after each check; URLs stored in evidence[]
+ * - One failed check does not stop the remaining checks
+ * - Screenshots are uploaded to Vercel Blob
+ * - Navigation is restricted to the same origin as the target application
  */
 
 import type { Page } from "playwright-core";
@@ -23,36 +24,38 @@ import type {
   Verdict,
 } from "@/types";
 
-// Step timeout per individual Playwright action (ms)
 const STEP_TIMEOUT = 10_000;
 
 // ---------------------------------------------------------------------------
 // Screenshot upload
 // ---------------------------------------------------------------------------
+
 async function uploadScreenshot(
   buffer: Buffer,
   label: string,
 ): Promise<string | null> {
   try {
     const filename = `evidence/${label}-${Date.now()}.png`;
+
     const { url } = await put(filename, buffer, {
       access: "public",
     });
 
     return url;
   } catch {
-    // Never crash the verification run because screenshot upload failed.
+    // Evidence upload failure must never change the verification verdict.
     return null;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Execute a single ActionStep against an open Playwright page.
-// Returns the outcome string; throws on assertion failure.
+// Execute one browser action
 // ---------------------------------------------------------------------------
+
 async function executeStep(
   page: Page,
   step: ActionStep,
+  targetUrl: string,
 ): Promise<string> {
   switch (step.type) {
     case "navigate": {
@@ -60,11 +63,24 @@ async function executeStep(
         throw new Error("navigate step missing value (URL)");
       }
 
-      await page.goto(step.value, {
+      /*
+       * Resolve both absolute and relative URLs against the target app.
+       * Then ensure navigation cannot leave the target application's origin.
+       */
+      const baseUrl = new URL(targetUrl);
+      const resolvedUrl = new URL(step.value, targetUrl);
+
+      if (resolvedUrl.origin !== baseUrl.origin) {
+        throw new Error(
+          "navigate step attempted to leave the target application",
+        );
+      }
+
+      await page.goto(resolvedUrl.toString(), {
         timeout: STEP_TIMEOUT,
       });
 
-      return `navigated to ${step.value}`;
+      return `navigated to ${resolvedUrl.toString()}`;
     }
 
     case "click": {
@@ -119,14 +135,14 @@ async function executeStep(
         throw new Error("expectText step missing expectedText");
       }
 
-      const el = page.locator(step.selector);
+      const locator = page.locator(step.selector);
 
-      await el.waitFor({
+      await locator.waitFor({
         state: "visible",
         timeout: STEP_TIMEOUT,
       });
 
-      const actual = await el.textContent({
+      const actual = await locator.textContent({
         timeout: STEP_TIMEOUT,
       });
 
@@ -144,11 +160,11 @@ async function executeStep(
         throw new Error("expectUrl step missing expectedUrl");
       }
 
-      const current = page.url();
+      const currentUrl = page.url();
 
-      if (!current.includes(step.expectedUrl)) {
+      if (!currentUrl.includes(step.expectedUrl)) {
         throw new AssertionError(
-          `expected URL to include "${step.expectedUrl}", got "${current}"`,
+          `expected URL to include "${step.expectedUrl}", got "${currentUrl}"`,
         );
       }
 
@@ -156,7 +172,6 @@ async function executeStep(
     }
 
     default: {
-      // Runtime safety for unexpected action types.
       const unknown = (step as ActionStep).type;
 
       throw new UnknownActionError(
@@ -167,8 +182,9 @@ async function executeStep(
 }
 
 // ---------------------------------------------------------------------------
-// Typed error classes
+// Typed errors
 // ---------------------------------------------------------------------------
+
 class AssertionError extends Error {
   readonly kind = "assertion" as const;
 
@@ -188,12 +204,13 @@ class UnknownActionError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Run a single AcceptanceCheck — returns a CheckResult.
-// Never throws; all errors are converted to FAIL or INCONCLUSIVE.
+// Run one acceptance check
 // ---------------------------------------------------------------------------
+
 async function runCheck(
   page: Page,
   check: AcceptanceCheck,
+  targetUrl: string,
 ): Promise<CheckResult> {
   const collector = new EvidenceCollector();
 
@@ -202,7 +219,11 @@ async function runCheck(
 
   for (const step of check.steps) {
     try {
-      const outcome = await executeStep(page, step);
+      const outcome = await executeStep(
+        page,
+        step,
+        targetUrl,
+      );
 
       collector.record(
         step.type,
@@ -214,7 +235,6 @@ async function runCheck(
         err instanceof Error ? err.message : String(err);
 
       if (err instanceof AssertionError) {
-        // Definite observable failure — the app did the wrong thing.
         collector.record(
           step.type,
           `FAIL — ${message}`,
@@ -227,7 +247,6 @@ async function runCheck(
       }
 
       if (err instanceof UnknownActionError) {
-        // Unknown action type — cannot determine outcome.
         collector.record(
           step.type,
           `INCONCLUSIVE — ${message}`,
@@ -239,7 +258,6 @@ async function runCheck(
         break;
       }
 
-      // Infrastructure error (timeout, network, selector problem, etc.).
       collector.record(
         step.type,
         `INCONCLUSIVE — ${message}`,
@@ -252,18 +270,21 @@ async function runCheck(
     }
   }
 
-  // Capture screenshot after the check completes.
+  // -------------------------------------------------------------------------
+  // Screenshot
+  // -------------------------------------------------------------------------
+
   const screenshotUrls: string[] = [];
 
   try {
-    const buffer = Buffer.from(
+    const screenshotBuffer = Buffer.from(
       await page.screenshot({
         fullPage: true,
       }),
     );
 
     const url = await uploadScreenshot(
-      buffer,
+      screenshotBuffer,
       `check-${check.id}-${verdict.toLowerCase()}`,
     );
 
@@ -271,10 +292,13 @@ async function runCheck(
       screenshotUrls.push(url);
     }
   } catch {
-    // Screenshot failure never changes the verdict.
+    // Screenshot failures never alter the verdict.
   }
 
-  // Build expected summary for the UI.
+  // -------------------------------------------------------------------------
+  // Expected summary
+  // -------------------------------------------------------------------------
+
   const expected = check.steps
     .map((step) => {
       if (step.type === "expectText") {
@@ -305,8 +329,9 @@ async function runCheck(
 }
 
 // ---------------------------------------------------------------------------
-// Public API — run all checks sequentially against the target URL.
+// Public API
 // ---------------------------------------------------------------------------
+
 export async function runChecks(
   checks: AcceptanceCheck[],
   targetUrl: string,
@@ -318,13 +343,20 @@ export async function runChecks(
     const context = await browser.newContext();
     const page = await context.newPage();
 
-    // Navigate to the target URL once before running checks.
+    /*
+     * Establish the initial target page before running checks.
+     */
     await page.goto(targetUrl, {
       timeout: STEP_TIMEOUT,
     });
 
     for (const check of checks) {
-      const result = await runCheck(page, check);
+      const result = await runCheck(
+        page,
+        check,
+        targetUrl,
+      );
+
       results.push(result);
     }
 
