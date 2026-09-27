@@ -54,8 +54,8 @@ const VALID_RESPONSE = JSON.stringify({
 describe("parseRequirement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Ensure the OPENAI_API_KEY env var is set so getClient() doesn't throw
-    process.env.OPENAI_API_KEY = "test-key";
+    // The production parser uses Groq through OpenAI's compatible SDK.
+    process.env.GROQ_API_KEY = "test-key";
   });
 
   it("returns AcceptanceCheck[] on valid LLM output", async () => {
