@@ -25,6 +25,7 @@ import type {
 } from "@/types";
 
 const STEP_TIMEOUT = 10_000;
+const RELOAD_TIMEOUT = 15_000;
 
 // ---------------------------------------------------------------------------
 // Screenshot upload
@@ -81,7 +82,8 @@ async function executeStep(
 
     case "reload": {
       await page.reload({
-        timeout: STEP_TIMEOUT,
+        waitUntil: "domcontentloaded",
+        timeout: RELOAD_TIMEOUT,
       });
 
       return "reloaded the current page";
