@@ -25,6 +25,7 @@ import type {
 } from "@/types";
 
 const STEP_TIMEOUT = 10_000;
+const RELOAD_TIMEOUT = 15_000;
 
 // ---------------------------------------------------------------------------
 // Screenshot upload
@@ -81,7 +82,8 @@ async function executeStep(
 
     case "reload": {
       await page.reload({
-        timeout: STEP_TIMEOUT,
+        waitUntil: "domcontentloaded",
+        timeout: RELOAD_TIMEOUT,
       });
 
       return "reloaded the current page";
@@ -164,9 +166,17 @@ async function executeStep(
         throw new Error("expectUrl step missing expectedUrl");
       }
 
-      const currentUrl = page.url();
-
-      if (!currentUrl.includes(step.expectedUrl)) {
+      // A click and a client-side redirect do not necessarily settle before
+      // Playwright returns control to the next action. Waiting here is
+      // especially important for the refresh/session check: the broken demo
+      // redirects from /dashboard to /login after hydration.
+      try {
+        await page.waitForURL(
+          (url) => url.toString().includes(step.expectedUrl ?? ""),
+          { timeout: STEP_TIMEOUT },
+        );
+      } catch {
+        const currentUrl = page.url();
         throw new AssertionError(
           `expected URL to include "${step.expectedUrl}", got "${currentUrl}"`,
         );
