@@ -8,6 +8,7 @@
  */
 
 import OpenAI from "openai";
+import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions/completions";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { AcceptanceCheckSchema } from "@/types";
@@ -264,26 +265,34 @@ async function callLLM(
 ): Promise<AcceptanceCheck[]> {
   const groqClient = getClient();
 
-  const response =
-    await groqClient.chat.completions.create({
-      model: "openai/gpt-oss-20b",
+  const request: ChatCompletionCreateParamsNonStreaming & {
+    reasoning_format: "hidden";
+  } = {
+    model: "openai/gpt-oss-20b",
 
-      response_format: {
-        type: "json_object",
+    response_format: {
+      type: "json_object",
+    },
+
+    // GPT-OSS exposes its chain of thought unless Groq is explicitly
+    // instructed to keep it hidden. JSON mode then returns only the
+    // acceptance-check payload we validate below.
+    reasoning_format: "hidden",
+
+    temperature: 0.1,
+
+    messages: [
+      {
+        role: "user",
+        content:
+          INSTRUCTIONS +
+          featureRequest +
+          "\n</feature_request>",
       },
+    ],
+  };
 
-      temperature: 0.1,
-
-      messages: [
-        {
-          role: "user",
-          content:
-            INSTRUCTIONS +
-            featureRequest +
-            "\n</feature_request>",
-        },
-      ],
-    });
+  const response = await groqClient.chat.completions.create(request);
 
   const raw = response.choices[0]?.message?.content;
 
