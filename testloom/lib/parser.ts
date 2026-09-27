@@ -140,6 +140,8 @@ or reloading:
 - explicitly use the "reload" action
 - do NOT replace reload with navigate
 - do NOT use logout as a substitute
+- after the login click, use expectUrl to verify the successful authenticated
+  destination BEFORE reload; never reload while the login redirect is pending
 - verify the authenticated state AFTER reload
 
 For example, for:
@@ -199,6 +201,10 @@ produce checks similar to:
         {
           "type": "click",
           "selector": "[data-testid=login-submit]"
+        },
+        {
+          "type": "expectUrl",
+          "expectedUrl": "/dashboard"
         },
         {
           "type": "reload"
